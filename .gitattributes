@@ -1,0 +1,32 @@
+# Normalize line endings: text files use LF on disk and in the repo,
+# regardless of the contributor's OS.
+* text=auto eol=lf
+
+# Go.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# Helm / YAML.
+*.yaml text eol=lf
+*.yml text eol=lf
+*.tpl text eol=lf
+
+# Shell.
+*.sh text eol=lf
+
+# Markdown / docs.
+*.md text eol=lf
+
+# License + container.
+LICENSE text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+
+# Treat binary blobs as binary so Git doesn't munge line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.tgz binary

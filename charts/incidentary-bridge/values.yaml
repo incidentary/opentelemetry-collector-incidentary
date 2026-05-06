@@ -1,0 +1,174 @@
+# Incidentary Bridge Helm chart values.
+#
+# REQUIRED values: apiKey, cluster.name. Everything else has defaults that
+# match the four published 1.0.0 SDKs.
+#
+# Example install:
+#
+#   helm install bridge \
+#     oci://ghcr.io/incidentary/opentelemetry-collector-incidentary/charts/incidentary-bridge \
+#     --version 0.1.0 \
+#     --namespace incidentary-system --create-namespace \
+#     --set apiKey=sk_live_... \
+#     --set cluster.name=prod-us-east-1
+# -----------------------------------------------------------------------------
+
+# apiKey is the Incidentary workspace API key. REQUIRED.
+# Stored in a Kubernetes Secret, mounted as INCIDENTARY_API_KEY in the pod.
+# Set existingSecretName instead to reference a pre-existing Secret.
+apiKey: ""
+
+# existingSecretName — use a pre-existing Secret instead of creating one.
+# When set, apiKey is ignored.
+existingSecretName: ""
+
+# existingSecretKey — the key within the existing Secret. Defaults to "token".
+existingSecretKey: "token"
+
+# -----------------------------------------------------------------------------
+# Cluster identification — stamped on every forwarded batch as
+# resource.k8s.cluster.name. REQUIRED.
+# -----------------------------------------------------------------------------
+cluster:
+  name: ""
+
+# Number of Bridge replicas. Two is the minimum for zero-downtime rollouts;
+# the receivers are stateless so horizontal scaling is linear.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/incidentary/opentelemetry-collector-incidentary
+  # tag defaults to .Chart.AppVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -----------------------------------------------------------------------------
+# Pre-alert circular buffer.
+# -----------------------------------------------------------------------------
+
+# preAlertWindow — how far back the buffer retains completed traces. Older
+# traces are evicted regardless of buffer fill (time-based eviction wins).
+preAlertWindow: 5m
+
+# maxBufferSize — hard upper bound on retained traces. A misconfigured
+# customer cannot exceed this. 50K is sized to ~256MiB resident at
+# typical span fan-out.
+maxBufferSize: 50000
+
+# -----------------------------------------------------------------------------
+# Four-trigger evaluator. Defaults match the four published 1.0.0 SDKs
+# exactly so the Bridge produces identical flush events to an in-process
+# SDK on the same trace stream — verified by the trigger-parity test
+# suite.
+# -----------------------------------------------------------------------------
+triggers:
+  fiveXxErrorRate:
+    high: 0.10
+    low: 0.02
+  slowSuccessRate:
+    high: 0.20
+    mild: 0.10
+  retryRate:
+    high: 0.10
+    mild: 0.05
+  inFlightPileup:
+    # Per-service in-flight span count above which the trigger fires.
+    # Implementation parity with the 1.0.0 SDKs.
+    threshold: 50
+
+# -----------------------------------------------------------------------------
+# Forwarding to the Incidentary backend.
+# -----------------------------------------------------------------------------
+forward:
+  # Direct OTLP endpoint at the Incidentary backend. Override for self-hosted
+  # / EU-residency deployments.
+  endpoint: https://api.incidentary.com/api/v1/otlp/v1/traces
+
+  # passThrough — also forward unaltered batches to the next processor in the
+  # collector pipeline so existing exporter chains keep working
+  # (collector mode only; ignored in standalone sidecar mode).
+  passThrough: true
+
+# -----------------------------------------------------------------------------
+# Resources — sized for the standalone sidecar shape. The buffer is the
+# dominant cost; CPU is mostly OTLP decoding.
+# -----------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+podLabels: {}
+podAnnotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Topology spread — replicas spread across zones/nodes for HA.
+# -----------------------------------------------------------------------------
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+# -----------------------------------------------------------------------------
+# Health probes — `/health` placeholder until the health_check extension
+# is wired. Probes are still configured so the Deployment doesn't churn.
+# -----------------------------------------------------------------------------
+healthCheck:
+  port: 13133
+  path: /health
+
+# -----------------------------------------------------------------------------
+# NetworkPolicy. ON BY DEFAULT in the Bridge chart. Enable a
+# NetworkPolicy-aware CNI (Calico, Cilium, Antrea, etc.) to actually
+# enforce.
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+
+  # Allow ingress from the same namespace by default — application pods in
+  # the same namespace push spans to the Bridge.
+  allowSameNamespace: true
+
+  # Allow Prometheus scrape on the metrics port. Selector defaults to the
+  # standard kube-prometheus-stack pod selector.
+  allowPrometheusScrape: false
+  prometheusFrom:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+
+  # Override the default 443 egress rule with a tighter allow-list (e.g.
+  # Incidentary's static egress IP). Each entry is a NetworkPolicyPeer +
+  # NetworkPolicyPort list.
+  egressTo: []
+
+  metricsPort: 8888
+
+# -----------------------------------------------------------------------------
+# ServiceMonitor — Prometheus Operator. OFF BY DEFAULT (requires the
+# monitoring.coreos.com/v1 CRDs).
+# -----------------------------------------------------------------------------
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  additionalLabels: {}

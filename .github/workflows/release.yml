@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  REGISTRY: ghcr.io
+  IMAGE_NAME: incidentary/opentelemetry-collector-incidentary
+  CHART_NAME: incidentary-bridge
+  CHART_REGISTRY_PATH: incidentary/charts
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # OIDC cosign keyless signing
+      id-token: write
+      # GHCR push (image + chart)
+      packages: write
+      # Read source + create the GitHub release
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU (multi-arch emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push container image (multi-arch)
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      # CVE gate — blocks the release on HIGH/CRITICAL fixable CVEs.
+      # ignore-unfixed because we cannot patch what upstream hasn't fixed.
+      # Documented response policy: HIGH/CRITICAL CVEs patched within 14
+      # days — see SECURITY.md.
+      - name: Trivy CVE scan (HIGH/CRITICAL gate)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: '1'
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: true
+          upload-release-assets: false
+
+      # Cosign keyless signing via GitHub Actions OIDC. No keys to rotate;
+      # provenance is the GitHub workflow identity that produced the artifact.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.0
+
+      - name: Sign container image (keyless)
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${IMAGE_DIGEST}"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.0
+
+      - name: Log in to GHCR OCI for Helm
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Update Chart.yaml version from tag
+        run: |
+          sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" charts/${{ env.CHART_NAME }}/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" charts/${{ env.CHART_NAME }}/Chart.yaml
+
+      - name: Update image tag in values.yaml
+        run: |
+          sed -i "s|tag:.*|tag: \"${{ github.ref_name }}\"|" charts/${{ env.CHART_NAME }}/values.yaml
+
+      - name: Package Helm chart
+        id: chart
+        run: |
+          helm package charts/${{ env.CHART_NAME }}
+          echo "file=${{ env.CHART_NAME }}-${{ steps.version.outputs.version }}.tgz" >> "$GITHUB_OUTPUT"
+
+      - name: Push Helm chart to GHCR OCI
+        id: chart_push
+        run: |
+          out=$(helm push "${{ steps.chart.outputs.file }}" oci://${{ env.REGISTRY }}/${{ env.CHART_REGISTRY_PATH }} 2>&1 | tee /dev/stderr)
+          digest=$(echo "$out" | awk -F'Digest: ' '/Digest:/ {print $2}' | tr -d '\r\n')
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign Helm chart (keyless)
+        env:
+          CHART_DIGEST: ${{ steps.chart_push.outputs.digest }}
+        run: |
+          cosign sign --yes \
+            "${{ env.REGISTRY }}/${{ env.CHART_REGISTRY_PATH }}/${{ env.CHART_NAME }}@${CHART_DIGEST}"
+
+      - name: Create GitHub release with attestations
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.chart.outputs.file }}
+            sbom.cdx.json

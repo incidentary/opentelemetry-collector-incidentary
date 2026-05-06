@@ -1,0 +1,84 @@
+name: Helm Test
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - '.github/workflows/helm-test.yml'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CHART_NAME: incidentary-bridge
+
+jobs:
+  lint-template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.0
+
+      - name: helm lint
+        run: helm lint charts/${{ env.CHART_NAME }} --set apiKey=test --set cluster.name=test
+
+      - name: helm template
+        run: helm template test charts/${{ env.CHART_NAME }} --set apiKey=test --set cluster.name=test
+
+      - name: helm template with networkPolicy disabled
+        run: helm template test charts/${{ env.CHART_NAME }} --set apiKey=test --set cluster.name=test --set networkPolicy.enabled=false
+
+      - name: helm template with serviceMonitor enabled
+        run: helm template test charts/${{ env.CHART_NAME }} --set apiKey=test --set cluster.name=test --set serviceMonitor.enabled=true
+
+  kind-install:
+    runs-on: ubuntu-latest
+    needs: lint-template
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.0
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          version: v0.23.0
+          cluster_name: bridge-helm-test
+          wait: 120s
+
+      - name: helm install
+        run: |
+          kubectl create namespace incidentary-system
+          helm install bridge charts/${{ env.CHART_NAME }} \
+            --namespace incidentary-system \
+            --set apiKey=test-key \
+            --set cluster.name=kind-ci \
+            --set image.tag=latest \
+            --set replicaCount=1 \
+            --wait --timeout=180s || {
+              echo "Install failed; dumping pod state:";
+              kubectl -n incidentary-system get pods -o wide;
+              kubectl -n incidentary-system describe pods;
+              kubectl -n incidentary-system logs -l app.kubernetes.io/name=incidentary-bridge --all-containers --tail=200 || true;
+              exit 1;
+            }
+
+      - name: helm test
+        run: helm test bridge --namespace incidentary-system --logs
+
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl -n incidentary-system get all
+          kubectl -n incidentary-system describe pods
+          kubectl -n incidentary-system logs -l app.kubernetes.io/name=incidentary-bridge --all-containers --tail=500 || true

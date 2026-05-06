@@ -1,0 +1,55 @@
+# Helm test — verifies the rendered ConfigMap is well-formed YAML and that the
+# Bridge image can read its config off the mount. Once the binary grows an
+# `incidentaryprocessor validate /etc/otelcol/config.yaml` subcommand, swap
+# the cat for that. For now we cat the file and assert non-empty content +
+# the presence of the `incidentary` processor block.
+#
+# Run with: helm test <release-name> --namespace <ns>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "incidentary-bridge.fullname" . }}-test-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "incidentary-bridge.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: validate
+      image: busybox:1.36
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -e
+          test -s /etc/otelcol/config.yaml || { echo "config.yaml is empty"; exit 1; }
+          grep -q '^    incidentary:' /etc/otelcol/config.yaml || { echo "incidentary processor block missing"; exit 1; }
+          grep -q 'otlp:' /etc/otelcol/config.yaml || { echo "otlp receiver missing"; exit 1; }
+          echo "config.yaml validated ($(wc -l < /etc/otelcol/config.yaml) lines)"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 65534
+        capabilities:
+          drop:
+            - ALL
+      volumeMounts:
+        - name: config
+          mountPath: /etc/otelcol
+          readOnly: true
+  volumes:
+    - name: config
+      configMap:
+        name: {{ include "incidentary-bridge.configMapName" . }}
+        items:
+          - key: config.yaml
+            path: config.yaml

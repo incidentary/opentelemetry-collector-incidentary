@@ -1,0 +1,17 @@
+type: incidentary
+
+status:
+  class: processor
+  stability:
+    alpha: [traces]
+  distributions: []
+  codeowners:
+    active:
+      - amk67482
+    seeking_new: true
+
+# Stability is alpha; will graduate to beta after the production
+# dogfood window. When the contrib donation lands, `distributions`
+# becomes [contrib].
+
+attributes: {}

@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "incidentary-bridge.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "incidentary-bridge.labels" . | nindent 4 }}
+data:
+  # OTel collector config consumed by the Bridge image at /etc/otelcol/config.yaml.
+  # Every value below either flows from .Values or is a Bridge default required
+  # for the standalone sidecar shape.
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      incidentary:
+        # Pre-alert circular buffer.
+        pre_alert_window: {{ .Values.preAlertWindow | quote }}
+        max_buffer_size: {{ .Values.maxBufferSize }}
+
+        # Four-trigger evaluator. Defaults match the four published
+        # 1.0.0 SDKs.
+        triggers:
+          5xx_error_rate:
+            high: {{ .Values.triggers.fiveXxErrorRate.high }}
+            low: {{ .Values.triggers.fiveXxErrorRate.low }}
+          slow_success_rate:
+            high: {{ .Values.triggers.slowSuccessRate.high }}
+            mild: {{ .Values.triggers.slowSuccessRate.mild }}
+          retry_rate:
+            high: {{ .Values.triggers.retryRate.high }}
+            mild: {{ .Values.triggers.retryRate.mild }}
+          in_flight_pileup:
+            threshold: {{ .Values.triggers.inFlightPileup.threshold }}
+
+        # Forwarding to the Incidentary backend.
+        forward:
+          incidentary_endpoint: {{ .Values.forward.endpoint | quote }}
+          # Token comes from env (INCIDENTARY_API_KEY) — never rendered into
+          # the ConfigMap. The processor reads $${INCIDENTARY_API_KEY}.
+          incidentary_token: $${INCIDENTARY_API_KEY}
+          pass_through: {{ .Values.forward.passThrough }}
+
+        # Cluster identification — stamped on every forwarded batch.
+        resource:
+          k8s.cluster.name: {{ .Values.cluster.name | quote }}
+
+    exporters:
+      otlphttp/incidentary:
+        endpoint: {{ .Values.forward.endpoint | quote }}
+        headers:
+          authorization: "Bearer $${INCIDENTARY_API_KEY}"
+          x-incidentary-surface: "processor"
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:{{ .Values.healthCheck.port }}
+        path: {{ .Values.healthCheck.path | quote }}
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [incidentary]
+          exporters: [otlphttp/incidentary]
+      telemetry:
+        metrics:
+          address: 0.0.0.0:{{ .Values.networkPolicy.metricsPort }}

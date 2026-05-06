@@ -1,0 +1,75 @@
+{{- if .Values.networkPolicy.enabled }}
+# NetworkPolicy for the Bridge — ON BY DEFAULT.
+#
+# Egress allow-list:
+#   - DNS (CoreDNS UDP/TCP 53)
+#   - Incidentary backend (TCP 443; tighten with networkPolicy.egressTo)
+#
+# Ingress allow-list:
+#   - Same namespace (application pods sending OTLP) — controlled by
+#     networkPolicy.allowSameNamespace.
+#   - Prometheus scrape on the metrics port — controlled by
+#     networkPolicy.allowPrometheusScrape.
+#
+# Enforced only on clusters running a NetworkPolicy-aware CNI (Calico,
+# Cilium, Antrea, etc.).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "incidentary-bridge.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "incidentary-bridge.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "incidentary-bridge.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Egress
+    - Ingress
+  egress:
+    # DNS — required for resolving the Incidentary backend hostname.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Incidentary backend — TLS to the configured ingest hostname.
+    {{- if .Values.networkPolicy.egressTo }}
+    {{- range .Values.networkPolicy.egressTo }}
+    - to:
+        {{- toYaml .to | nindent 8 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+    {{- else }}
+    # Default: allow egress to any 443 (the chart can't know the customer's
+    # ingest hostname; tighten with networkPolicy.egressTo in production).
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+  ingress:
+    {{- if .Values.networkPolicy.allowSameNamespace }}
+    # Application pods in the same namespace push OTLP to 4317/4318.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    {{- end }}
+    {{- if .Values.networkPolicy.allowPrometheusScrape }}
+    - from:
+        {{- toYaml .Values.networkPolicy.prometheusFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.metricsPort | default 8888 }}
+    {{- end }}
+{{- end }}

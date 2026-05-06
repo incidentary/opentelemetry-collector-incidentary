@@ -1,0 +1,18 @@
+/bin/
+/dist/
+/build/
+*.test
+*.out
+coverage.txt
+*.pprof
+
+# OCB-generated
+/cmd/incidentaryprocessor/_otelcol/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store

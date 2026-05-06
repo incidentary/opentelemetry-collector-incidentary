@@ -1,0 +1,37 @@
+# OpenTelemetry Collector Builder (OCB) manifest.
+#
+# Produces a stand-alone Bridge binary with OTLP receiver +
+# incidentaryprocessor + OTLP/HTTP exporter pre-built. Hand-rolled
+# main.go in this same directory is the simpler equivalent for the
+# distroless container; OCB is the path for downstream distributions
+# that want to add receivers/exporters not in the minimal sidecar.
+#
+# Reference: https://github.com/open-telemetry/opentelemetry-collector/tree/main/cmd/builder
+
+dist:
+  module: github.com/incidentary/opentelemetry-collector-incidentary
+  name: incidentary-bridge
+  description: "Incidentary Bridge — standalone OTel collector sidecar"
+  version: 0.1.0
+  output_path: ./_otelcol
+
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.122.0
+
+processors:
+  - gomod: github.com/incidentary/opentelemetry-collector-incidentary/processor/incidentaryprocessor v0.1.0
+    path: ./processor/incidentaryprocessor
+
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.122.0
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.122.0
+
+extensions:
+  - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.122.0
+
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.28.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.28.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.28.0
+
+connectors: []

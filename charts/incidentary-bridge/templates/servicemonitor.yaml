@@ -1,0 +1,30 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Prometheus Operator ServiceMonitor — OFF BY DEFAULT.
+#
+# Enable when the cluster runs the Prometheus Operator (the
+# monitoring.coreos.com/v1 CRDs must already be installed). On other
+# clusters, helm install fails on this resource — keep enabled=false and
+# rely on direct scrape config.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "incidentary-bridge.fullname" . }}
+  namespace: {{ .Values.serviceMonitor.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "incidentary-bridge.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "incidentary-bridge.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout | default "10s" }}
+{{- end }}

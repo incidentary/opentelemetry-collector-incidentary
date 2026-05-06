@@ -1,0 +1,22 @@
+apiVersion: v2
+name: incidentary-bridge
+description: |
+  Helm chart for the Incidentary Bridge — standalone sidecar deployment of
+  the OpenTelemetry collector with the Incidentary processor pre-loaded.
+  Captures unsampled spans into a pre-alert circular buffer, evaluates the
+  four 1.0.0 SDK triggers per-service, and forwards on flush.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://incidentary.com/processor
+sources:
+  - https://github.com/incidentary/opentelemetry-collector-incidentary
+maintainers:
+  - name: Ahmed Mostafa
+    email: amk67482@gmail.com
+keywords:
+  - opentelemetry
+  - incidentary
+  - incident-management
+  - tracing
+  - otel-collector

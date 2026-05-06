@@ -1,0 +1,47 @@
+Incidentary Bridge {{ .Chart.AppVersion }} installed.
+
+Cluster name (resource.k8s.cluster.name on every forwarded batch):
+  {{ .Values.cluster.name }}
+
+Replicas: {{ .Values.replicaCount }}
+Pre-alert window: {{ .Values.preAlertWindow }}
+Max buffer size: {{ .Values.maxBufferSize }} traces
+
+The Bridge is exposed inside the cluster at:
+  {{ include "incidentary-bridge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+
+Point your applications at it. Two common patterns:
+
+1) OpenTelemetry SDK env vars (no code changes):
+
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://{{ include "incidentary-bridge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:4318
+   OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+
+2) An existing collector exporter pointing at the Bridge:
+
+   exporters:
+     otlp/incidentary:
+       endpoint: {{ include "incidentary-bridge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:4317
+       tls:
+         insecure: true
+
+Health: http://{{ include "incidentary-bridge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.healthCheck.port }}{{ .Values.healthCheck.path }}
+
+{{- if not .Values.serviceMonitor.enabled }}
+
+Prometheus scraping is disabled. Re-install with --set serviceMonitor.enabled=true
+once the prometheus-operator CRDs are installed in the cluster.
+{{- end }}
+
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy is enabled. The Bridge can only:
+  - Egress to DNS + the configured Incidentary backend.
+  - Receive OTLP from pods in the same namespace ({{ .Release.Namespace }}).
+{{- if not .Values.networkPolicy.allowPrometheusScrape }}
+  - Prometheus scrape blocked. Re-install with --set networkPolicy.allowPrometheusScrape=true to allow.
+{{- end }}
+{{- end }}
+
+For docs and the four-trigger evaluator semantics:
+  https://incidentary.com/docs/bridge
